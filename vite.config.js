@@ -8,6 +8,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    base: './', // ensures correct relative paths for deployment
     define: {
       // Polyfill process.env for the provided code structure
       'process.env.API_KEY': JSON.stringify(env.API_KEY),
