@@ -2,6 +2,7 @@ import { TripPreferences, Itinerary } from "../types";
 
 // --- CONFIGURATION: IMAGE API KEYS ---
 // These remain on the client for direct browser fetching to avoid server timeouts on image processing
+// Note: GOOGLE_API_KEY is no longer used here.
 const UNSPLASH_ACCESS_KEY = process.env.UNSPLASH_ACCESS_KEY || "PkfwOUNXL239BcQnXVlQ648ZmYIpzIzEtk9eQC0hBOQ"; 
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY || "CWQEpRvcOTu7VoxRrXd7cL37GDxkDtf6Vo43q1ye1iSjLxRf8MNyfhC4";
 
@@ -221,7 +222,8 @@ export const generateItinerary = async (prefs: TripPreferences): Promise<Itinera
     });
 
     if (!response.ok) {
-      throw new Error(`Server error: ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(`Server error: ${response.status} ${errorText}`);
     }
 
     const data = await response.json();
@@ -251,7 +253,8 @@ export const modifyItinerary = async (currentItinerary: Itinerary, request: stri
     });
 
     if (!response.ok) {
-       throw new Error(`Server error: ${response.statusText}`);
+       const errorText = await response.text();
+       throw new Error(`Server error: ${response.status} ${errorText}`);
     }
 
     const newData = await response.json();

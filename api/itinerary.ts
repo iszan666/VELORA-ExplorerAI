@@ -2,9 +2,9 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 // Initialize with the server-side environment variable
+// Ensure you set GOOGLE_API_KEY in Vercel Environment Variables
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 
-// Define Schema (Moved from frontend)
 const itinerarySchema: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -92,12 +92,19 @@ const itinerarySchema: Schema = {
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Allow CORS for local development if needed, or rely on Vercel's same-origin handling
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
   const { action, prefs, currentItinerary, request } = req.body;
-  const model = "gemini-3-flash-preview";
+  
+  // Using the Flash model for speed and JSON capability
+  const model = "gemini-2.5-flash-002"; 
 
   try {
     let prompt = '';
@@ -176,6 +183,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const text = response.text;
     if (!text) throw new Error("No response from AI");
 
+    // Sometimes models add markdown code blocks, strip them just in case
     const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
     const data = JSON.parse(cleanedText);
 
@@ -183,6 +191,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   } catch (error) {
     console.error("API Error:", error);
-    return res.status(500).json({ error: 'Failed to generate content', details: error instanceof Error ? error.message : String(error) });
+    return res.status(500).json({ 
+      error: 'Failed to generate content', 
+      details: error instanceof Error ? error.message : String(error) 
+    });
   }
 }
