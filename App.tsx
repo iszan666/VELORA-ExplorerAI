@@ -91,6 +91,14 @@ const App: React.FC = () => {
       setView('ITINERARY_DETAILS');
   };
 
+  const handleItineraryUpdate = (updatedItinerary: Itinerary) => {
+    setCurrentItinerary(updatedItinerary);
+    // Update history entry if it exists
+    setTripHistory(prev => prev.map(t => t.id === updatedItinerary.id ? updatedItinerary : t));
+    // Update saved entry if it exists
+    setSavedItineraries(prev => prev.map(t => t.id === updatedItinerary.id ? updatedItinerary : t));
+  };
+
   const handleClearHistory = () => {
     if (confirm('Are you sure you want to clear your trip history? This action cannot be undone.')) {
         setTripHistory([]);
@@ -138,6 +146,7 @@ const App: React.FC = () => {
             isSaved={isSaved}
             onToggleSave={handleToggleSave}
             onNavigate={setView}
+            onUpdate={handleItineraryUpdate}
         />
     );
   }

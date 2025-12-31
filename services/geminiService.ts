@@ -266,6 +266,38 @@ const fetchDayImage = async (destination: string, day: any, vibe: string): Promi
   return VIBE_IMAGES[vibe as keyof typeof VIBE_IMAGES] || VIBE_IMAGES.Default;
 };
 
+/**
+ * Enriches a raw itinerary with real images
+ */
+const enrichItineraryWithImages = async (
+  data: any, 
+  destination: string, 
+  vibe: string
+): Promise<Itinerary> => {
+  // Process days to fetch real images for each day in parallel
+  const enhancedDays = await Promise.all(data.days.map(async (day: any) => {
+      // Re-use existing image if it's already a real URL (not a placeholder logic) 
+      // AND title hasn't changed drastically? 
+      // For simplicity, we re-fetch to ensure match with new titles if changed.
+      const img = await fetchDayImage(destination, day, vibe);
+      return { ...day, imageUrl: img };
+  }));
+
+  // Fetch Hero Image if missing
+  let heroImage = data.heroImage;
+  if (!heroImage) {
+      heroImage = await fetchRealLocationImage(destination, vibe);
+  }
+  
+  return {
+    ...data,
+    days: enhancedDays,
+    vibe: vibe,
+    heroImage: heroImage,
+    destination: destination
+  } as Itinerary;
+};
+
 export const generateItinerary = async (prefs: TripPreferences): Promise<Itinerary> => {
   try {
     const model = "gemini-3-flash-preview"; 
@@ -323,26 +355,68 @@ export const generateItinerary = async (prefs: TripPreferences): Promise<Itinera
 
     const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
     const data = JSON.parse(cleanedText);
-    
-    // Process days to fetch real images for each day in parallel
-    const enhancedDays = await Promise.all(data.days.map(async (day: any) => {
-        const img = await fetchDayImage(prefs.destination, day, prefs.vibe);
-        return { ...day, imageUrl: img };
-    }));
-    
     const heroImage = await heroImagePromise;
+    data.heroImage = heroImage;
     
-    return {
-        ...data,
-        days: enhancedDays, // Use the days with fetched images
-        id: crypto.randomUUID(),
-        vibe: prefs.vibe,
-        heroImage: heroImage,
-        destination: prefs.destination // Pass the raw destination string
-    } as Itinerary;
+    return await enrichItineraryWithImages(data, prefs.destination, prefs.vibe);
 
   } catch (error) {
     console.error("Gemini API Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Modifies an existing itinerary based on user instructions.
+ * Performs partial regeneration.
+ */
+export const modifyItinerary = async (currentItinerary: Itinerary, request: string): Promise<Itinerary> => {
+  try {
+    const model = "gemini-3-flash-preview";
+
+    const prompt = `
+      You are a professional travel advisor refining an existing travel itinerary for ${currentItinerary.destination || currentItinerary.tripTitle}.
+      
+      **Current Itinerary JSON:**
+      ${JSON.stringify(currentItinerary)}
+
+      **User Request:**
+      "${request}"
+
+      **Instructions:**
+      1. Update the JSON to strictly fulfill the user's request (e.g., change activities, update vibe, adjust pacing).
+      2. **PRESERVE** the existing destination, trip duration, and budget level unless explicitly asked to change.
+      3. **PRESERVE** unmodified sections exactly as they are. Do not rewrite descriptions unless necessary.
+      4. Maintain the original professional, elegant tone.
+      5. Ensure strictly valid JSON output matching the original schema.
+      6. If changing activities, provide new realistic GPS coordinates and icons.
+      7. Update the "Why This Destination Works for You" section only if the changes significantly alter the trip's nature.
+
+      **Goal:**
+      Make the user feel heard by making thoughtful, specific adjustments without disrupting the parts of the plan they didn't complain about.
+    `;
+
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: itinerarySchema,
+        temperature: 0.6
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No response from AI during modification");
+
+    const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const newData = JSON.parse(cleanedText);
+
+    // Re-run image enrichment to ensure any *new* activities get appropriate photos
+    return await enrichItineraryWithImages(newData, currentItinerary.destination || "", currentItinerary.vibe || "Nature");
+
+  } catch (error) {
+    console.error("Gemini Modification Error:", error);
     throw error;
   }
 };

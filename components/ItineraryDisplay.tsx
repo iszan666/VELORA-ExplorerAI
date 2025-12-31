@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Itinerary, DayPlan, AppView } from '../types';
 import ItineraryMap from './ItineraryMap';
+import { modifyItinerary } from '../services/geminiService';
 
 interface ItineraryDisplayProps {
   data: Itinerary;
@@ -8,6 +9,7 @@ interface ItineraryDisplayProps {
   isSaved: boolean;
   onToggleSave: (itinerary: Itinerary) => void;
   onNavigate: (view: AppView) => void;
+  onUpdate: (data: Itinerary) => void;
 }
 
 interface DayCardProps {
@@ -110,7 +112,7 @@ const CURRENCY_RATES: Record<string, number> = {
     'MXN': 17.10
   };
 
-const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSaved, onToggleSave, onNavigate }) => {
+const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSaved, onToggleSave, onNavigate, onUpdate }) => {
   const [expandedDay, setExpandedDay] = useState<number>(1);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [isMapMounted, setIsMapMounted] = useState(false);
@@ -120,11 +122,23 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSav
   const [convertAmount, setConvertAmount] = useState<string>('');
   const [targetCurrency, setTargetCurrency] = useState('EUR');
 
+  // Modification State
+  const [showModify, setShowModify] = useState(false);
+  const [modifyRequest, setModifyRequest] = useState('');
+  const [isRefining, setIsRefining] = useState(false);
+  const modifyInputRef = useRef<HTMLTextAreaElement>(null);
+
   useEffect(() => {
     // This ensures the map only loads on the client side, 
     // mimicking Next.js dynamic import { ssr: false }
     setIsMapMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (showModify && modifyInputRef.current) {
+        modifyInputRef.current.focus();
+    }
+  }, [showModify]);
 
   useEffect(() => {
     if (data.totalBudget) {
@@ -156,11 +170,26 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSav
 
   const handleFlightSearch = () => {
     // Construct a search query for Google Flights
-    // Use destination if available, otherwise fallback to tripTitle
     const destinationName = data.destination || data.tripTitle.replace('Trip to ', '').replace('Itinerary', '').trim();
-    // Include date range in the query to help the search engine (e.g. "Flights to Bali Oct 12 - Oct 24")
     const query = `Flights to ${destinationName} ${data.dateRange}`;
     window.open(`https://www.google.com/travel/flights?q=${encodeURIComponent(query)}`, '_blank');
+  };
+
+  const handleModifySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modifyRequest.trim()) return;
+    
+    setIsRefining(true);
+    try {
+        const updatedItinerary = await modifyItinerary(data, modifyRequest);
+        onUpdate(updatedItinerary);
+        setShowModify(false);
+        setModifyRequest('');
+    } catch (error) {
+        alert("Could not update itinerary. Please try again.");
+    } finally {
+        setIsRefining(false);
+    }
   };
 
   return (
@@ -405,6 +434,14 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSav
         )}
       </main>
 
+       {/* Floating Action Button for Modify */}
+       <button 
+           onClick={() => setShowModify(true)}
+           className="fixed bottom-24 right-6 z-40 flex items-center justify-center w-14 h-14 rounded-full bg-primary shadow-[0_0_20px_rgba(19,236,109,0.4)] text-background-dark hover:scale-110 active:scale-95 transition-all"
+       >
+           <span className="material-symbols-outlined text-3xl">auto_fix</span>
+       </button>
+
        {/* Bottom Navigation */}
        <nav className="fixed bottom-0 left-0 right-0 glass-panel border-t border-surface-glass-border px-6 py-3 pb-6 z-50 max-w-md mx-auto">
             <div className="flex justify-between items-center">
@@ -488,6 +525,60 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSav
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+        )}
+
+        {/* Modify Modal */}
+        {showModify && (
+            <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                <div className="w-full sm:max-w-md bg-[#161f1a] border-t sm:border border-white/10 rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl relative animate-in slide-in-from-bottom-10 sm:zoom-in-95 duration-300">
+                     <button 
+                        onClick={() => !isRefining && setShowModify(false)}
+                        disabled={isRefining}
+                        className="absolute top-4 right-4 text-gray-400 hover:text-white"
+                    >
+                        <span className="material-symbols-outlined">close</span>
+                    </button>
+
+                    <div className="mb-6">
+                        <div className="flex items-center gap-2 mb-2">
+                             <span className="material-symbols-outlined text-primary text-2xl">auto_fix</span>
+                             <h3 className="text-xl font-bold text-white">Refine Your Trip</h3>
+                        </div>
+                        <p className="text-sm text-gray-400">Ask the AI to adjust specific parts of your itinerary.</p>
+                    </div>
+
+                    <form onSubmit={handleModifySubmit}>
+                        <div className="mb-4">
+                            <textarea 
+                                ref={modifyInputRef}
+                                value={modifyRequest}
+                                onChange={(e) => setModifyRequest(e.target.value)}
+                                disabled={isRefining}
+                                placeholder='e.g., "Add more vegan food options", "Make Day 2 less busy", "Switch museums for parks"...'
+                                className="w-full h-32 bg-surface-dark border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all resize-none text-sm placeholder-gray-500"
+                            />
+                        </div>
+                        
+                        <button 
+                            type="submit"
+                            disabled={!modifyRequest.trim() || isRefining}
+                            className="w-full h-12 flex items-center justify-center gap-2 bg-primary disabled:bg-primary/50 text-background-dark font-bold rounded-xl transition-transform active:scale-[0.98] shadow-lg shadow-primary/20"
+                        >
+                            {isRefining ? (
+                                <>
+                                  <span className="w-4 h-4 border-2 border-background-dark border-t-transparent rounded-full animate-spin"></span>
+                                  Updating Plan...
+                                </>
+                            ) : (
+                                <>
+                                  <span className="material-symbols-outlined text-[20px]">send</span>
+                                  Update Itinerary
+                                </>
+                            )}
+                        </button>
+                    </form>
                 </div>
             </div>
         )}
