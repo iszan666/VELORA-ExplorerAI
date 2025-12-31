@@ -25,6 +25,12 @@ export interface DayPlan {
   activities: Activity[];
 }
 
+export interface LocalContext {
+  foodAndDrinks: string[];
+  customs: string;
+  etiquetteTips: string[];
+}
+
 export interface Itinerary {
   id: string;
   tripTitle: string;
@@ -37,6 +43,9 @@ export interface Itinerary {
   packingList: string[];
   vibe?: string;
   heroImage?: string; // Real-world location image URL
+  destination?: string; // Added for deep linking
+  budgetAssumption?: string; // Added for budget transparency section
+  localContext?: LocalContext; // Added for cultural context
 }
 
 export type AppView = 'HOME' | 'SAVED' | 'TRIPS' | 'PROFILE' | 'ITINERARY_DETAILS';

@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useEffect, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -8,6 +10,23 @@ interface ItineraryMapProps {
 }
 
 // Fix for default marker icons missing in webpack/esm builds
+// In Next.js, this usually needs to run only on client, hence the check or useEffect
+const fixLeafletIcons = () => {
+  if (typeof window !== 'undefined') {
+    // Only unset if L.Icon.Default.prototype._getIconUrl is defined
+    // @ts-ignore
+    delete L.Icon.Default.prototype._getIconUrl;
+
+    L.Icon.Default.mergeOptions({
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+      shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    });
+  }
+};
+
+fixLeafletIcons();
+
 const icon = L.icon({
   iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
   iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',

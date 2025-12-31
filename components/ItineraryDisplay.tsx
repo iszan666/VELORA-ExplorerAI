@@ -18,8 +18,7 @@ interface DayCardProps {
 }
 
 const DayCard: React.FC<DayCardProps> = ({ day, isExpanded, onToggle, vibe }) => {
-  // Use Vibe-based generic backgrounds for day cards to keep it performant
-  // while the Main Hero uses the specific location image.
+  // Use the fetched specific image, or fallback to vibe-based generic
   const getVibeImage = () => {
      switch(vibe) {
         case 'Urban': return "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?q=80&w=1920&auto=format&fit=crop";
@@ -29,13 +28,14 @@ const DayCard: React.FC<DayCardProps> = ({ day, isExpanded, onToggle, vibe }) =>
      }
   };
   
-  const bgImage = getVibeImage();
+  // Prefer the specific image URL found via Unsplash/Pexels API
+  const bgImage = day.imageUrl || getVibeImage();
 
   if (isExpanded) {
     return (
       <article className="glass-card rounded-2xl overflow-hidden shadow-lg shadow-black/20 group animate-in fade-in slide-in-from-bottom-4 duration-500 mb-4">
         <div className="relative h-48 w-full cursor-pointer" onClick={() => onToggle(day.day)}>
-          <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url('${bgImage}')` }}></div>
+          <div className="absolute inset-0 bg-cover bg-center transition-transform duration-700 hover:scale-105" style={{ backgroundImage: `url('${bgImage}')` }}></div>
           <div className="absolute inset-0 bg-gradient-to-t from-[#161f1a] to-transparent"></div>
           <div className="absolute bottom-4 left-4 right-4 flex justify-between items-end">
             <div>
@@ -43,10 +43,10 @@ const DayCard: React.FC<DayCardProps> = ({ day, isExpanded, onToggle, vibe }) =>
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary text-background-dark uppercase tracking-wide">Day {day.day}</span>
                 <span className="text-gray-300 text-xs">{day.date}</span>
               </div>
-              <h2 className="text-2xl font-bold text-white leading-tight">{day.title}</h2>
+              <h2 className="text-2xl font-bold text-white leading-tight drop-shadow-md">{day.title}</h2>
             </div>
             <div className="text-right">
-              <p className="text-primary font-bold">{day.costEstimate}</p>
+              <p className="text-primary font-bold drop-shadow-sm">{day.costEstimate}</p>
             </div>
           </div>
         </div>
@@ -82,7 +82,7 @@ const DayCard: React.FC<DayCardProps> = ({ day, isExpanded, onToggle, vibe }) =>
   return (
     <article onClick={() => onToggle(day.day)} className="glass-card rounded-xl p-4 flex items-center justify-between group active:scale-[0.98] transition-transform duration-200 mb-3 cursor-pointer">
       <div className="flex items-center gap-4">
-        <div className="w-12 h-12 rounded-lg bg-cover bg-center shrink-0" style={{ backgroundImage: `url('${bgImage}')` }}></div>
+        <div className="w-12 h-12 rounded-lg bg-cover bg-center shrink-0 shadow-inner" style={{ backgroundImage: `url('${bgImage}')` }}></div>
         <div>
           <div className="flex items-center gap-2">
             <span className="text-primary font-bold text-xs uppercase">Day {day.day}</span>
@@ -91,7 +91,7 @@ const DayCard: React.FC<DayCardProps> = ({ day, isExpanded, onToggle, vibe }) =>
           <h3 className="text-white font-semibold text-sm line-clamp-1">{day.title}</h3>
         </div>
       </div>
-      <button className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-gray-400">
+      <button className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-gray-400 group-hover:bg-white/10 transition-colors">
         <span className="material-symbols-outlined">expand_more</span>
       </button>
     </article>
@@ -113,11 +113,18 @@ const CURRENCY_RATES: Record<string, number> = {
 const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSaved, onToggleSave, onNavigate }) => {
   const [expandedDay, setExpandedDay] = useState<number>(1);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+  const [isMapMounted, setIsMapMounted] = useState(false);
 
   // Currency Converter State
   const [showConverter, setShowConverter] = useState(false);
   const [convertAmount, setConvertAmount] = useState<string>('');
   const [targetCurrency, setTargetCurrency] = useState('EUR');
+
+  useEffect(() => {
+    // This ensures the map only loads on the client side, 
+    // mimicking Next.js dynamic import { ssr: false }
+    setIsMapMounted(true);
+  }, []);
 
   useEffect(() => {
     if (data.totalBudget) {
@@ -146,6 +153,15 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSav
         currency: targetCurrency 
     });
   }, [convertAmount, targetCurrency]);
+
+  const handleFlightSearch = () => {
+    // Construct a search query for Google Flights
+    // Use destination if available, otherwise fallback to tripTitle
+    const destinationName = data.destination || data.tripTitle.replace('Trip to ', '').replace('Itinerary', '').trim();
+    // Include date range in the query to help the search engine (e.g. "Flights to Bali Oct 12 - Oct 24")
+    const query = `Flights to ${destinationName} ${data.dateRange}`;
+    window.open(`https://www.google.com/travel/flights?q=${encodeURIComponent(query)}`, '_blank');
+  };
 
   return (
     <div className="relative min-h-screen w-full flex flex-col overflow-x-hidden max-w-md mx-auto shadow-2xl bg-background-dark">
@@ -212,40 +228,56 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSav
             <>
                 {/* Stats */}
                 <section className="flex gap-3 overflow-x-auto no-scrollbar pb-2 snap-x">
-                <div className="glass-card min-w-[140px] p-4 rounded-xl flex flex-col gap-2 snap-start">
-                    <div className="flex items-center gap-2 text-primary/80">
-                    <span className="material-symbols-outlined text-xl">account_balance_wallet</span>
-                    <span className="text-xs font-semibold uppercase tracking-wider">Budget</span>
+                    <div className="glass-card min-w-[140px] p-4 rounded-xl flex flex-col gap-2 snap-start">
+                        <div className="flex items-center gap-2 text-primary/80">
+                        <span className="material-symbols-outlined text-xl">account_balance_wallet</span>
+                        <span className="text-xs font-semibold uppercase tracking-wider">Budget</span>
+                        </div>
+                        <div>
+                        <p className="text-white text-xl font-bold">{data.totalBudget}</p>
+                        <p className="text-gray-400 text-xs">Est. Total Cost</p>
+                        </div>
                     </div>
-                    <div>
-                    <p className="text-white text-xl font-bold">{data.totalBudget}</p>
-                    <p className="text-gray-400 text-xs">Est. Total Cost</p>
+                    <div className="glass-card min-w-[140px] p-4 rounded-xl flex flex-col gap-2 snap-start">
+                        <div className="flex items-center gap-2 text-yellow-400/80">
+                        <span className="material-symbols-outlined text-xl">sunny</span>
+                        <span className="text-xs font-semibold uppercase tracking-wider">Weather</span>
+                        </div>
+                        <div>
+                        <p className="text-white text-xl font-bold">{data.weather.split(',')[0]}</p>
+                        <p className="text-gray-400 text-xs line-clamp-1">{data.weather}</p>
+                        </div>
                     </div>
-                </div>
-                <div className="glass-card min-w-[140px] p-4 rounded-xl flex flex-col gap-2 snap-start">
-                    <div className="flex items-center gap-2 text-yellow-400/80">
-                    <span className="material-symbols-outlined text-xl">sunny</span>
-                    <span className="text-xs font-semibold uppercase tracking-wider">Weather</span>
+                    
+                    {/* Flights Button */}
+                     <div 
+                        onClick={handleFlightSearch}
+                        className="glass-card min-w-[140px] p-4 rounded-xl flex flex-col gap-2 snap-start cursor-pointer hover:bg-white/5 active:scale-95 transition-all group border-emerald-400/20"
+                    >
+                        <div className="flex items-center gap-2 text-emerald-400/80">
+                        <span className="material-symbols-outlined text-xl group-hover:-rotate-45 transition-transform duration-500">flight_takeoff</span>
+                        <span className="text-xs font-semibold uppercase tracking-wider">Travel</span>
+                        </div>
+                        <div>
+                        <p className="text-white text-lg font-bold line-clamp-1 group-hover:text-emerald-400 transition-colors">Find Flights</p>
+                        <p className="text-gray-400 text-xs">Check availability</p>
+                        </div>
                     </div>
-                    <div>
-                    <p className="text-white text-xl font-bold">{data.weather.split(',')[0]}</p>
-                    <p className="text-gray-400 text-xs line-clamp-1">{data.weather}</p>
+
+                    {/* Clickable Rate Card triggering Converter */}
+                    <div 
+                        onClick={() => setShowConverter(true)}
+                        className="glass-card min-w-[140px] p-4 rounded-xl flex flex-col gap-2 snap-start cursor-pointer hover:bg-white/5 active:scale-95 transition-all group border-blue-400/20"
+                    >
+                        <div className="flex items-center gap-2 text-blue-400/80">
+                        <span className="material-symbols-outlined text-xl group-hover:rotate-180 transition-transform duration-500">currency_exchange</span>
+                        <span className="text-xs font-semibold uppercase tracking-wider">Rate</span>
+                        </div>
+                        <div>
+                        <p className="text-white text-lg font-bold line-clamp-1 group-hover:text-blue-400 transition-colors">Convert</p>
+                        <p className="text-gray-400 text-xs">Tap to calculate</p>
+                        </div>
                     </div>
-                </div>
-                {/* Clickable Rate Card triggering Converter */}
-                <div 
-                    onClick={() => setShowConverter(true)}
-                    className="glass-card min-w-[140px] p-4 rounded-xl flex flex-col gap-2 snap-start cursor-pointer hover:bg-white/5 active:scale-95 transition-all group border-blue-400/20"
-                >
-                    <div className="flex items-center gap-2 text-blue-400/80">
-                    <span className="material-symbols-outlined text-xl group-hover:rotate-180 transition-transform duration-500">currency_exchange</span>
-                    <span className="text-xs font-semibold uppercase tracking-wider">Rate</span>
-                    </div>
-                    <div>
-                    <p className="text-white text-lg font-bold line-clamp-1 group-hover:text-blue-400 transition-colors">Convert</p>
-                    <p className="text-gray-400 text-xs">Tap to calculate</p>
-                    </div>
-                </div>
                 </section>
 
                 {/* Days */}
@@ -262,9 +294,9 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSav
                 </section>
 
                 {/* Essentials */}
-                <section className="pt-4">
+                <section className="pt-4 pb-8">
                 <h3 className="text-lg font-bold text-white mb-3 px-1">Essentials</h3>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-3 mb-3">
                     <div className="glass-card p-4 rounded-xl">
                     <div className="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center mb-3">
                         <span className="material-symbols-outlined text-purple-400">lightbulb</span>
@@ -284,11 +316,78 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSav
                     </p>
                     </div>
                 </div>
+                
+                {/* Local Context Card */}
+                {data.localContext && (
+                    <div className="glass-card p-4 rounded-xl mb-3">
+                        <div className="flex items-center gap-2 mb-3 text-amber-400">
+                            <span className="material-symbols-outlined text-lg">public</span>
+                            <h4 className="font-semibold text-sm">Local Context</h4>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <h5 className="text-xs font-bold text-gray-300 uppercase tracking-wide mb-1 flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[14px]">restaurant_menu</span>
+                                Culinary Staples
+                                </h5>
+                                <div className="flex flex-wrap gap-2">
+                                    {data.localContext.foodAndDrinks.map((item, i) => (
+                                        <span key={i} className="px-2 py-1 rounded bg-white/5 text-xs text-gray-300 border border-white/5">
+                                            {item}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div>
+                                <h5 className="text-xs font-bold text-gray-300 uppercase tracking-wide mb-1 flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[14px]">diversity_3</span>
+                                Culture & Customs
+                                </h5>
+                                <p className="text-xs text-gray-400 leading-relaxed mb-2">
+                                    {data.localContext.customs}
+                                </p>
+                            </div>
+                            
+                            <div>
+                                <h5 className="text-xs font-bold text-gray-300 uppercase tracking-wide mb-1 flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[14px]">handshake</span>
+                                Etiquette
+                                </h5>
+                                <ul className="text-xs text-gray-400 leading-relaxed list-disc list-inside marker:text-primary">
+                                    {data.localContext.etiquetteTips.map((tip, i) => (
+                                        <li key={i}>{tip}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Budget Assumption Card */}
+                {data.budgetAssumption && (
+                    <div className="glass-card p-4 rounded-xl">
+                        <div className="flex items-center gap-2 mb-2 text-emerald-400">
+                             <span className="material-symbols-outlined text-lg">payments</span>
+                             <h4 className="font-semibold text-sm">Budget Note</h4>
+                        </div>
+                        <p className="text-xs text-gray-400 leading-relaxed">
+                            {data.budgetAssumption}
+                        </p>
+                    </div>
+                )}
                 </section>
             </>
         ) : (
             <div className="flex-1 w-full h-full min-h-[500px] rounded-2xl overflow-hidden border border-white/10 relative shadow-2xl">
-                <ItineraryMap data={data} />
+                {isMapMounted ? (
+                    <ItineraryMap data={data} />
+                ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-surface-dark">
+                        <span className="text-gray-400 text-sm">Loading Map...</span>
+                    </div>
+                )}
             </div>
         )}
       </main>

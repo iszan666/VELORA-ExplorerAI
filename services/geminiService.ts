@@ -1,14 +1,22 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { TripPreferences, Itinerary } from "../types";
+import { TripPreferences, Itinerary, DayPlan } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// High-quality Unsplash fallbacks based on Vibe if specific location image fails
+// --- CONFIGURATION: IMAGE API KEYS ---
+// To make the images "real", paste your API keys inside the quotes below.
+// If you leave these blank, the app will fallback to Wikipedia (free) or generic images.
+
+const UNSPLASH_ACCESS_KEY = process.env.UNSPLASH_ACCESS_KEY || "PkfwOUNXL239BcQnXVlQ648ZmYIpzIzEtk9eQC0hBOQ"; 
+const PEXELS_API_KEY = process.env.PEXELS_API_KEY || "CWQEpRvcOTu7VoxRrXd7cL37GDxkDtf6Vo43q1ye1iSjLxRf8MNyfhC4";
+
+// -------------------------------------
+
 const VIBE_IMAGES = {
-  Nature: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?q=80&w=2070&auto=format&fit=crop", // Landscape
-  Urban: "https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?q=80&w=2144&auto=format&fit=crop", // City
-  Relax: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?q=80&w=2073&auto=format&fit=crop", // Beach/Relax
-  Food: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=2070&auto=format&fit=crop", // Food
+  Nature: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?q=80&w=2070&auto=format&fit=crop", 
+  Urban: "https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?q=80&w=2144&auto=format&fit=crop", 
+  Relax: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?q=80&w=2073&auto=format&fit=crop", 
+  Food: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=2070&auto=format&fit=crop", 
   Default: "https://images.unsplash.com/photo-1469474968028-56623f02e42e?q=80&w=2074&auto=format&fit=crop"
 };
 
@@ -29,6 +37,31 @@ const itinerarySchema: Schema = {
       type: Type.ARRAY,
       items: { type: Type.STRING },
       description: "3-4 essential packing items"
+    },
+    budgetAssumption: {
+      type: Type.STRING,
+      description: "A professional paragraph explaining the mid-range budget assumptions and disclaimer about variable costs."
+    },
+    localContext: {
+      type: Type.OBJECT,
+      description: "Cultural context including food, customs, and etiquette",
+      properties: {
+        foodAndDrinks: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "2-3 well-known local foods or drinks"
+        },
+        customs: {
+          type: Type.STRING,
+          description: "Brief explanation of cultural habits or daily customs (1-2 sentences)"
+        },
+        etiquetteTips: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "Short practical travel etiquette tips"
+        }
+      },
+      required: ["foodAndDrinks", "customs", "etiquetteTips"]
     },
     days: {
       type: Type.ARRAY,
@@ -66,35 +99,166 @@ const itinerarySchema: Schema = {
       }
     }
   },
-  required: ["tripTitle", "dateRange", "totalBudget", "weather", "days", "localTips", "packingList"]
+  required: ["tripTitle", "dateRange", "totalBudget", "weather", "days", "localTips", "packingList", "budgetAssumption", "localContext"]
+};
+
+// --- Image Provider Helpers ---
+
+const getSearchQueries = (destination: string) => {
+  const parts = destination.split(',').map(p => p.trim());
+  const city = parts[0];
+  const country = parts.length > 1 ? parts[parts.length - 1] : city;
+
+  return [
+    destination,                       // 1. City + Country
+    `${city} landmark skyline`,        // 2. City landmark
+    `${country} travel scenery`        // 3. Country travel
+  ];
+};
+
+const fetchUnsplashImage = async (query: string): Promise<string | null> => {
+  if (!UNSPLASH_ACCESS_KEY) return null;
+  try {
+    const res = await fetch(
+      `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&orientation=landscape&per_page=1&content_filter=high`,
+      { headers: { Authorization: `Client-ID ${UNSPLASH_ACCESS_KEY}` } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.results?.[0]?.urls?.regular || null;
+  } catch { return null; }
+};
+
+const fetchPexelsImage = async (query: string): Promise<string | null> => {
+  if (!PEXELS_API_KEY) return null;
+  try {
+    const res = await fetch(
+      `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&orientation=landscape&per_page=1`,
+      { headers: { Authorization: PEXELS_API_KEY } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.photos?.[0]?.src?.large2x || null;
+  } catch { return null; }
+};
+
+const fetchWikipediaImage = async (destination: string): Promise<string | null> => {
+  try {
+    const res = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(destination)}`);
+    if (res.ok) {
+      const data = await res.json();
+      return data.originalimage?.source || data.thumbnail?.source || null;
+    }
+    const city = destination.split(',')[0].trim();
+    if (city !== destination) {
+       const resCity = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(city)}`);
+       if (resCity.ok) {
+          const data = await resCity.json();
+          return data.originalimage?.source || data.thumbnail?.source || null;
+       }
+    }
+    return null;
+  } catch { return null; }
+};
+
+// Generic helper to try providers in order
+const fetchFromProviders = async (query: string): Promise<string | null> => {
+  if (UNSPLASH_ACCESS_KEY) {
+    const img = await fetchUnsplashImage(query);
+    if (img) return img;
+  }
+  if (PEXELS_API_KEY) {
+    const img = await fetchPexelsImage(query);
+    if (img) return img;
+  }
+  return null;
 };
 
 /**
- * Fetches a real-world image for the destination using the Wikimedia Summary API.
- * This is robust, free, and returns specific location photos.
+ * Fetches a gallery of images for the loading screen
  */
-const fetchLocationImage = async (destination: string, vibe: string): Promise<string> => {
-  try {
-    // Attempt to get a specific image for the city/location
-    const response = await fetch(
-      `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(destination)}`
-    );
-    
-    if (response.ok) {
-      const data = await response.json();
-      if (data.originalimage?.source) {
-        return data.originalimage.source;
+export const fetchDestinationGallery = async (destination: string): Promise<string[]> => {
+  const query = `${destination} travel landmark`;
+  
+  // Try Unsplash
+  if (UNSPLASH_ACCESS_KEY) {
+    try {
+      const res = await fetch(
+        `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&orientation=landscape&per_page=8&content_filter=high`,
+        { headers: { Authorization: `Client-ID ${UNSPLASH_ACCESS_KEY}` } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.results && data.results.length > 0) {
+           return data.results.map((r: any) => r.urls.regular);
+        }
       }
-      if (data.thumbnail?.source) {
-        // Force higher res if possible by manipulating URL, otherwise just return thumbnail
-        return data.thumbnail.source;
-      }
-    }
-  } catch (e) {
-    console.warn("Failed to fetch location image, falling back to vibe.", e);
+    } catch (e) { console.error("Unsplash Gallery Error", e); }
   }
 
-  // Fallback to Vibe-based high-quality Unsplash image
+  // Try Pexels
+  if (PEXELS_API_KEY) {
+    try {
+      const res = await fetch(
+        `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&orientation=landscape&per_page=8`,
+        { headers: { Authorization: PEXELS_API_KEY } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.photos && data.photos.length > 0) {
+            return data.photos.map((p: any) => p.src.large2x);
+        }
+      }
+    } catch (e) { console.error("Pexels Gallery Error", e); }
+  }
+
+  // Fallback defaults
+  return [
+    "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?q=80&w=2021&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?q=80&w=2070&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?q=80&w=2073&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1501785888041-af3ef285b470?q=80&w=2070&auto=format&fit=crop"
+  ];
+};
+
+/**
+ * Fetches the Hero Image using multiple robust queries
+ */
+const fetchRealLocationImage = async (destination: string, vibe: string): Promise<string> => {
+  const queries = getSearchQueries(destination);
+
+  // Try providers with robust queries
+  for (const query of queries) {
+    const img = await fetchFromProviders(query);
+    if (img) return img;
+  }
+
+  // Try Wikipedia
+  const wikiImg = await fetchWikipediaImage(destination);
+  if (wikiImg) return wikiImg;
+
+  // Fallback
+  return VIBE_IMAGES[vibe as keyof typeof VIBE_IMAGES] || VIBE_IMAGES.Default;
+};
+
+/**
+ * Fetches a specific image for a Day Plan
+ */
+const fetchDayImage = async (destination: string, day: any, vibe: string): Promise<string> => {
+  // 1. Try: Destination + Day Title (e.g. "Tokyo Shibuya Crossing")
+  const cleanTitle = day.title.replace(/[^a-zA-Z0-9 ]/g, ' ');
+  const titleQuery = `${destination} ${cleanTitle}`;
+  let img = await fetchFromProviders(titleQuery);
+  if (img) return img;
+
+  // 2. Try: Destination + First Activity (e.g. "Tokyo Meiji Shrine")
+  if (day.activities && day.activities.length > 0) {
+      const activityQuery = `${destination} ${day.activities[0].title}`;
+      img = await fetchFromProviders(activityQuery);
+      if (img) return img;
+  }
+
+  // 3. Fallback to Vibe (we return null here so the UI can decide or we return vibe here)
   return VIBE_IMAGES[vibe as keyof typeof VIBE_IMAGES] || VIBE_IMAGES.Default;
 };
 
@@ -102,8 +266,8 @@ export const generateItinerary = async (prefs: TripPreferences): Promise<Itinera
   try {
     const model = "gemini-3-flash-preview"; 
     
-    // Start fetching the image in parallel with the AI request
-    const imagePromise = fetchLocationImage(prefs.destination, prefs.vibe);
+    // Start fetching the Hero image in parallel with the AI request
+    const heroImagePromise = fetchRealLocationImage(prefs.destination, prefs.vibe);
 
     const prompt = `
       Curate a bespoke travel itinerary for ${prefs.destination}.
@@ -114,14 +278,24 @@ export const generateItinerary = async (prefs: TripPreferences): Promise<Itinera
       - Vibe: ${prefs.vibe}.
 
       **Style Guide:**
-      - **Tone:** Elegant, professional, and inspiring. Use sophisticated language (e.g., "Embark," "Savor," "Discover").
-      - **Structure:** Each day MUST have exactly three activities labeled strictly as 'Morning', 'Afternoon', and 'Evening'.
-      - **Descriptions:** Short, refined, and impactful. Focus on the unique atmosphere and key experience. Avoid generic filler words.
+      - **Tone:** Elegant, professional, and inspiring. Use sophisticated language.
+      - **Structure:** Each day MUST have exactly three activities labeled 'Morning', 'Afternoon', and 'Evening'.
+      - **Descriptions:** Short, refined, and impactful.
+      - **Budget Section:** Include a short "Budget Assumption" section. Write it in a professional, calm travel-advisor tone. Assume a mid-range travel style that includes:
+         - Comfortable 3-star accommodation
+         - Public transportation or standard ride services
+         - Regular dining at local restaurants
+         Clearly state that the budget provided is an estimate, not a fixed price, and that actual costs may vary depending on travel season, availability, personal preferences, and destination conditions.
+      - **Local Context:** Include a section for local context.
+         - **Food:** 2–3 genuine local foods or drinks.
+         - **Customs:** Brief explanation of habits/daily customs (1-2 sentences).
+         - **Etiquette:** Short, practical etiquette tips.
+         - **Tone:** Calm, professional, factual. No stereotypes.
 
       **Requirements:**
       1. Generate a valid JSON response based on the schema.
       2. Ensure icons are valid Material Symbols Outlined names (snake_case).
-      3. **Crucial:** Provide realistic GPS coordinates (lat, lng) for every activity for map plotting.
+      3. **Crucial:** Provide realistic GPS coordinates (lat, lng) for every activity.
       4. Make the content highly specific to ${prefs.destination}.
       5. Assume the trip starts tomorrow.
     `;
@@ -139,19 +313,24 @@ export const generateItinerary = async (prefs: TripPreferences): Promise<Itinera
     const text = response.text;
     if (!text) throw new Error("No response from AI");
 
-    // Robust JSON parsing
     const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
     const data = JSON.parse(cleanedText);
     
-    // Await the real image
-    const heroImage = await imagePromise;
+    // Process days to fetch real images for each day in parallel
+    const enhancedDays = await Promise.all(data.days.map(async (day: any) => {
+        const img = await fetchDayImage(prefs.destination, day, prefs.vibe);
+        return { ...day, imageUrl: img };
+    }));
     
-    // Inject ID, vibe, and the fetched real-world image
+    const heroImage = await heroImagePromise;
+    
     return {
         ...data,
+        days: enhancedDays, // Use the days with fetched images
         id: crypto.randomUUID(),
         vibe: prefs.vibe,
-        heroImage: heroImage
+        heroImage: heroImage,
+        destination: prefs.destination // Pass the raw destination string
     } as Itinerary;
 
   } catch (error) {
