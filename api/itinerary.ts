@@ -1,55 +1,37 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// SERVER-SIDE CODE ONLY
-// This runs in a Node.js environment on Vercel.
-// It securely accesses process.env.GOOGLE_API_KEY
-const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+// --- SERVER-SIDE CONFIGURATION ---
+// This file runs in a secure Node.js environment on Vercel.
+// It is the ONLY place authorized to use the Google GenAI SDK.
+const apiKey = process.env.GOOGLE_API_KEY;
 
+// Fail fast on server start if key is missing (logs to Vercel dashboard)
+if (!apiKey) {
+  console.error("CRITICAL ERROR: GOOGLE_API_KEY is missing in Vercel Environment Variables.");
+}
+
+const ai = new GoogleGenAI({ apiKey: apiKey || "" });
+
+// Schema Definition (kept identical to ensure consistent JSON)
 const itinerarySchema: Schema = {
   type: Type.OBJECT,
   properties: {
-    tripTitle: { type: Type.STRING, description: "Title of the trip, e.g., 'Trip to Bali'" },
-    dateRange: { type: Type.STRING, description: "Simulated date range, e.g., 'Oct 12 - Oct 24'" },
-    totalBudget: { type: Type.STRING, description: "Estimated total cost" },
-    weather: { type: Type.STRING, description: "Expected weather summary, e.g. '28°C, Sunny'" },
-    currencyRate: { type: Type.STRING, description: "Exchange rate info, e.g., '1 USD = 15,450 IDR'" },
-    whyDestination: { 
-      type: Type.STRING, 
-      description: "A professional, personalized explanation (3-4 sentences) of why this destination fits the user's duration, budget, and vibe." 
-    },
-    localTips: { 
-      type: Type.ARRAY, 
-      items: { type: Type.STRING },
-      description: "2-3 short, essential local tips"
-    },
-    packingList: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: "3-4 essential packing items"
-    },
-    budgetAssumption: {
-      type: Type.STRING,
-      description: "A professional paragraph explaining the mid-range budget assumptions and disclaimer about variable costs."
-    },
+    tripTitle: { type: Type.STRING },
+    dateRange: { type: Type.STRING },
+    totalBudget: { type: Type.STRING },
+    weather: { type: Type.STRING },
+    currencyRate: { type: Type.STRING },
+    whyDestination: { type: Type.STRING },
+    localTips: { type: Type.ARRAY, items: { type: Type.STRING } },
+    packingList: { type: Type.ARRAY, items: { type: Type.STRING } },
+    budgetAssumption: { type: Type.STRING },
     localContext: {
       type: Type.OBJECT,
-      description: "Cultural context including food, customs, and etiquette",
       properties: {
-        foodAndDrinks: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING },
-          description: "2-3 well-known local foods or drinks"
-        },
-        customs: {
-          type: Type.STRING,
-          description: "Brief explanation of cultural habits or daily customs (1-2 sentences)"
-        },
-        etiquetteTips: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING },
-          description: "Short practical travel etiquette tips"
-        }
+        foodAndDrinks: { type: Type.ARRAY, items: { type: Type.STRING } },
+        customs: { type: Type.STRING },
+        etiquetteTips: { type: Type.ARRAY, items: { type: Type.STRING } }
       },
       required: ["foodAndDrinks", "customs", "etiquetteTips"]
     },
@@ -60,24 +42,20 @@ const itinerarySchema: Schema = {
         properties: {
           day: { type: Type.INTEGER },
           date: { type: Type.STRING },
-          title: { type: Type.STRING, description: "Main theme of the day" },
-          costEstimate: { type: Type.STRING, description: "Cost for this day" },
+          title: { type: Type.STRING },
+          costEstimate: { type: Type.STRING },
           activities: {
             type: Type.ARRAY,
             items: {
               type: Type.OBJECT,
               properties: {
-                time: { type: Type.STRING, description: "Strictly 'Morning', 'Afternoon', or 'Evening'" },
+                time: { type: Type.STRING },
                 title: { type: Type.STRING },
-                desc: { type: Type.STRING, description: "A refined, professional description (1-2 sentences)" },
-                icon: { type: Type.STRING, description: "Material symbol name (e.g. restaurant, hiking, museum)" },
+                desc: { type: Type.STRING },
+                icon: { type: Type.STRING },
                 coordinates: {
                   type: Type.OBJECT,
-                  description: "Coordinates of the activity location",
-                  properties: {
-                    lat: { type: Type.NUMBER },
-                    lng: { type: Type.NUMBER }
-                  },
+                  properties: { lat: { type: Type.NUMBER }, lng: { type: Type.NUMBER } },
                   required: ["lat", "lng"]
                 }
               },
@@ -93,7 +71,12 @@ const itinerarySchema: Schema = {
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Allow CORS for local development if needed, or rely on Vercel's same-origin handling
+  // CORS Handling for local dev vs production
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*'); 
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -102,9 +85,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  // Double check key at request time to send helpful error to client
+  if (!process.env.GOOGLE_API_KEY) {
+    return res.status(500).json({ 
+      error: "Configuration Error", 
+      message: "Server missing API Key. Please set GOOGLE_API_KEY in Vercel." 
+    });
+  }
+
   const { action, prefs, currentItinerary, request } = req.body;
-  
-  // Using the Flash model for speed and JSON capability
   const model = "gemini-2.5-flash-002"; 
 
   try {
@@ -113,59 +102,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'generate') {
       prompt = `
         Curate a bespoke travel itinerary for ${prefs.destination}.
-        
-        **Trip Parameters:**
-        - Duration: ${prefs.duration} days.
-        - Budget: ${prefs.budget} (Scale: $ Economy to $$$ Luxury).
-        - Vibe: ${prefs.vibe}.
-
-        **Style Guide:**
-        - **Tone:** Elegant, professional, and inspiring. Use sophisticated language.
-        - **Structure:** Each day MUST have exactly three activities labeled 'Morning', 'Afternoon', and 'Evening'.
-        - **Descriptions:** Short, refined, and impactful.
-        - **Budget Section:** Include a short "Budget Assumption" section. Write it in a professional, calm travel-advisor tone. Assume a mid-range travel style that includes:
-           - Comfortable 3-star accommodation
-           - Public transportation or standard ride services
-           - Regular dining at local restaurants
-           Clearly state that the budget provided is an estimate, not a fixed price, and that actual costs may vary depending on travel season, availability, personal preferences, and destination conditions.
-        - **Local Context:** Include a section for local context.
-           - **Food:** 2–3 genuine local foods or drinks.
-           - **Customs:** Brief explanation of habits/daily customs (1-2 sentences).
-           - **Etiquette:** Short, practical etiquette tips.
-           - **Tone:** Calm, professional, factual. No stereotypes.
-        - **Advisor Note:** Include a section titled "Why This Destination Works for You".
-           - Explain why it fits the ${prefs.duration}-day timeframe, ${prefs.budget} budget, and ${prefs.vibe} vibe.
-           - Mention accessibility/ease of travel.
-           - Tone: Professional, reassuring, no marketing fluff. 3-4 sentences max.
-
-        **Requirements:**
-        1. Generate a valid JSON response based on the schema.
-        2. Ensure icons are valid Material Symbols Outlined names (snake_case).
-        3. **Crucial:** Provide realistic GPS coordinates (lat, lng) for every activity.
-        4. Make the content highly specific to ${prefs.destination}.
-        5. Assume the trip starts tomorrow.
+        Duration: ${prefs.duration} days. Budget: ${prefs.budget}. Vibe: ${prefs.vibe}.
+        Return strictly JSON matching the provided schema.
+        Ensure every activity has realistic latitude/longitude coordinates.
+        Assume trip starts tomorrow.
       `;
     } else if (action === 'modify') {
       prompt = `
-        You are a professional travel advisor refining an existing travel itinerary for ${currentItinerary.destination || currentItinerary.tripTitle}.
-        
-        **Current Itinerary JSON:**
-        ${JSON.stringify(currentItinerary)}
-
-        **User Request:**
-        "${request}"
-
-        **Instructions:**
-        1. Update the JSON to strictly fulfill the user's request (e.g., change activities, update vibe, adjust pacing).
-        2. **PRESERVE** the existing destination, trip duration, and budget level unless explicitly asked to change.
-        3. **PRESERVE** unmodified sections exactly as they are. Do not rewrite descriptions unless necessary.
-        4. Maintain the original professional, elegant tone.
-        5. Ensure strictly valid JSON output matching the original schema.
-        6. If changing activities, provide new realistic GPS coordinates and icons.
-        7. Update the "Why This Destination Works for You" section only if the changes significantly alter the trip's nature.
-
-        **Goal:**
-        Make the user feel heard by making thoughtful, specific adjustments without disrupting the parts of the plan they didn't complain about.
+        You are a travel advisor. Modify this itinerary: ${JSON.stringify(currentItinerary)}
+        User Request: "${request}"
+        Keep the structure valid JSON.
       `;
     } else {
       return res.status(400).json({ error: 'Invalid action' });
@@ -177,7 +123,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       config: {
         responseMimeType: "application/json",
         responseSchema: itinerarySchema,
-        temperature: 0.6
       }
     });
 
@@ -190,9 +135,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(data);
 
   } catch (error) {
-    console.error("API Error:", error);
+    console.error("Server API Error:", error);
     return res.status(500).json({ 
-      error: 'Failed to generate content', 
+      error: 'Generation Failed', 
       details: error instanceof Error ? error.message : String(error) 
     });
   }
