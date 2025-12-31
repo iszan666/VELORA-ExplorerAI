@@ -28,7 +28,7 @@ Built with a "dark mode first" aesthetic, utilizing glassmorphism, fluid animati
 ## Technical Architecture
 
 **Frontend Core**
-- React 19
+- React 18
 - TypeScript
 - Tailwind CSS (Container Queries, Custom Animations)
 
