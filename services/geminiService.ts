@@ -28,6 +28,10 @@ const itinerarySchema: Schema = {
     totalBudget: { type: Type.STRING, description: "Estimated total cost" },
     weather: { type: Type.STRING, description: "Expected weather summary, e.g. '28°C, Sunny'" },
     currencyRate: { type: Type.STRING, description: "Exchange rate info, e.g., '1 USD = 15,450 IDR'" },
+    whyDestination: { 
+      type: Type.STRING, 
+      description: "A professional, personalized explanation (3-4 sentences) of why this destination fits the user's duration, budget, and vibe." 
+    },
     localTips: { 
       type: Type.ARRAY, 
       items: { type: Type.STRING },
@@ -99,7 +103,7 @@ const itinerarySchema: Schema = {
       }
     }
   },
-  required: ["tripTitle", "dateRange", "totalBudget", "weather", "days", "localTips", "packingList", "budgetAssumption", "localContext"]
+  required: ["tripTitle", "dateRange", "totalBudget", "weather", "days", "localTips", "packingList", "budgetAssumption", "localContext", "whyDestination"]
 };
 
 // --- Image Provider Helpers ---
@@ -291,6 +295,10 @@ export const generateItinerary = async (prefs: TripPreferences): Promise<Itinera
          - **Customs:** Brief explanation of habits/daily customs (1-2 sentences).
          - **Etiquette:** Short, practical etiquette tips.
          - **Tone:** Calm, professional, factual. No stereotypes.
+      - **Advisor Note:** Include a section titled "Why This Destination Works for You".
+         - Explain why it fits the ${prefs.duration}-day timeframe, ${prefs.budget} budget, and ${prefs.vibe} vibe.
+         - Mention accessibility/ease of travel.
+         - Tone: Professional, reassuring, no marketing fluff. 3-4 sentences max.
 
       **Requirements:**
       1. Generate a valid JSON response based on the schema.

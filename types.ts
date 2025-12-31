@@ -46,6 +46,7 @@ export interface Itinerary {
   destination?: string; // Added for deep linking
   budgetAssumption?: string; // Added for budget transparency section
   localContext?: LocalContext; // Added for cultural context
+  whyDestination?: string; // Added for personalized advisor rationale
 }
 
 export type AppView = 'HOME' | 'SAVED' | 'TRIPS' | 'PROFILE' | 'ITINERARY_DETAILS';

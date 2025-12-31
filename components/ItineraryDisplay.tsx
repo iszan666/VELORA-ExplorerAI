@@ -280,6 +280,19 @@ const ItineraryDisplay: React.FC<ItineraryDisplayProps> = ({ data, onBack, isSav
                     </div>
                 </section>
 
+                {/* Advisor's Note / Why This Destination */}
+                {data.whyDestination && (
+                    <div className="glass-card p-4 rounded-xl border-l-4 border-l-primary mb-2">
+                        <div className="flex items-center gap-2 mb-2">
+                             <span className="material-symbols-outlined text-primary text-lg">verified</span>
+                             <h4 className="font-bold text-sm text-white">Advisor's Insight</h4>
+                        </div>
+                        <p className="text-xs text-gray-300 leading-relaxed italic">
+                            "{data.whyDestination}"
+                        </p>
+                    </div>
+                )}
+
                 {/* Days */}
                 <section>
                 {data.days.map(day => (
