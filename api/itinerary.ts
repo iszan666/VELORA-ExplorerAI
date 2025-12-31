@@ -1,8 +1,9 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Initialize with the server-side environment variable
-// Ensure you set GOOGLE_API_KEY in Vercel Environment Variables
+// SERVER-SIDE CODE ONLY
+// This runs in a Node.js environment on Vercel.
+// It securely accesses process.env.GOOGLE_API_KEY
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 
 const itinerarySchema: Schema = {
@@ -183,7 +184,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const text = response.text;
     if (!text) throw new Error("No response from AI");
 
-    // Sometimes models add markdown code blocks, strip them just in case
     const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
     const data = JSON.parse(cleanedText);
 

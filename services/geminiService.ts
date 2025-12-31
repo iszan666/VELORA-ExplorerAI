@@ -1,10 +1,15 @@
 import { TripPreferences, Itinerary } from "../types";
 
-// --- CONFIGURATION: IMAGE API KEYS ---
-// These remain on the client for direct browser fetching to avoid server timeouts on image processing
-// Note: GOOGLE_API_KEY is no longer used here.
-const UNSPLASH_ACCESS_KEY = process.env.UNSPLASH_ACCESS_KEY || "PkfwOUNXL239BcQnXVlQ648ZmYIpzIzEtk9eQC0hBOQ"; 
-const PEXELS_API_KEY = process.env.PEXELS_API_KEY || "CWQEpRvcOTu7VoxRrXd7cL37GDxkDtf6Vo43q1ye1iSjLxRf8MNyfhC4";
+// --- CLIENT-SIDE SERVICE ---
+// This file runs in the browser.
+// It MUST NOT import @google/genai
+// It MUST NOT use process.env.GOOGLE_API_KEY
+
+// CONFIGURATION: IMAGE API KEYS
+// These are safe to expose if restricted by domain in your dashboard, 
+// or can be moved to server-side if strict security is required.
+const UNSPLASH_ACCESS_KEY = process.env.UNSPLASH_ACCESS_KEY; 
+const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 
 // -------------------------------------
 
@@ -75,7 +80,6 @@ const fetchWikipediaImage = async (destination: string): Promise<string | null> 
   } catch { return null; }
 };
 
-// Generic helper to try providers in order
 const fetchFromProviders = async (query: string): Promise<string | null> => {
   if (UNSPLASH_ACCESS_KEY) {
     const img = await fetchUnsplashImage(query);
@@ -88,13 +92,9 @@ const fetchFromProviders = async (query: string): Promise<string | null> => {
   return null;
 };
 
-/**
- * Fetches a gallery of images for the loading screen
- */
 export const fetchDestinationGallery = async (destination: string): Promise<string[]> => {
   const query = `${destination} travel landmark`;
   
-  // Try Unsplash
   if (UNSPLASH_ACCESS_KEY) {
     try {
       const res = await fetch(
@@ -110,7 +110,6 @@ export const fetchDestinationGallery = async (destination: string): Promise<stri
     } catch (e) { console.error("Unsplash Gallery Error", e); }
   }
 
-  // Try Pexels
   if (PEXELS_API_KEY) {
     try {
       const res = await fetch(
@@ -126,7 +125,6 @@ export const fetchDestinationGallery = async (destination: string): Promise<stri
     } catch (e) { console.error("Pexels Gallery Error", e); }
   }
 
-  // Fallback defaults
   return [
     "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?q=80&w=2021&auto=format&fit=crop",
     "https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?q=80&w=2070&auto=format&fit=crop",
@@ -135,63 +133,41 @@ export const fetchDestinationGallery = async (destination: string): Promise<stri
   ];
 };
 
-/**
- * Fetches the Hero Image using multiple robust queries
- */
 const fetchRealLocationImage = async (destination: string, vibe: string): Promise<string> => {
   const queries = getSearchQueries(destination);
-
-  // Try providers with robust queries
   for (const query of queries) {
     const img = await fetchFromProviders(query);
     if (img) return img;
   }
-
-  // Try Wikipedia
   const wikiImg = await fetchWikipediaImage(destination);
   if (wikiImg) return wikiImg;
-
-  // Fallback
   return VIBE_IMAGES[vibe as keyof typeof VIBE_IMAGES] || VIBE_IMAGES.Default;
 };
 
-/**
- * Fetches a specific image for a Day Plan
- */
 const fetchDayImage = async (destination: string, day: any, vibe: string): Promise<string> => {
-  // 1. Try: Destination + Day Title (e.g. "Tokyo Shibuya Crossing")
   const cleanTitle = day.title.replace(/[^a-zA-Z0-9 ]/g, ' ');
   const titleQuery = `${destination} ${cleanTitle}`;
   let img = await fetchFromProviders(titleQuery);
   if (img) return img;
 
-  // 2. Try: Destination + First Activity (e.g. "Tokyo Meiji Shrine")
   if (day.activities && day.activities.length > 0) {
       const activityQuery = `${destination} ${day.activities[0].title}`;
       img = await fetchFromProviders(activityQuery);
       if (img) return img;
   }
-
-  // 3. Fallback to Vibe (we return null here so the UI can decide or we return vibe here)
   return VIBE_IMAGES[vibe as keyof typeof VIBE_IMAGES] || VIBE_IMAGES.Default;
 };
 
-/**
- * Enriches a raw itinerary with real images
- */
 const enrichItineraryWithImages = async (
   data: any, 
   destination: string, 
   vibe: string
 ): Promise<Itinerary> => {
-  // Process days to fetch real images for each day in parallel
   const enhancedDays = await Promise.all(data.days.map(async (day: any) => {
-      // Re-use existing image if it's already a real URL (not a placeholder logic) 
       const img = await fetchDayImage(destination, day, vibe);
       return { ...day, imageUrl: img };
   }));
 
-  // Fetch Hero Image if missing (or passed from previous promise)
   let heroImage = data.heroImage;
   if (!heroImage) {
       heroImage = await fetchRealLocationImage(destination, vibe);
@@ -206,12 +182,14 @@ const enrichItineraryWithImages = async (
   } as Itinerary;
 };
 
+// --- CORE FUNCTION: GENERATE ---
+// This calls the Vercel Serverless Function via fetch.
+// It DOES NOT use the Google SDK directly.
 export const generateItinerary = async (prefs: TripPreferences): Promise<Itinerary> => {
   try {
-    // Start fetching the Hero image in parallel with the API request
     const heroImagePromise = fetchRealLocationImage(prefs.destination, prefs.vibe);
 
-    // Call the Serverless Function instead of Google GenAI SDK directly
+    // Call /api/itinerary (Relative path works automatically in Vercel)
     const response = await fetch('/api/itinerary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -230,7 +208,6 @@ export const generateItinerary = async (prefs: TripPreferences): Promise<Itinera
     const heroImage = await heroImagePromise;
     data.heroImage = heroImage;
     
-    // Enrich with images on the client side
     return await enrichItineraryWithImages(data, prefs.destination, prefs.vibe);
 
   } catch (error) {
@@ -239,9 +216,9 @@ export const generateItinerary = async (prefs: TripPreferences): Promise<Itinera
   }
 };
 
+// --- CORE FUNCTION: MODIFY ---
 export const modifyItinerary = async (currentItinerary: Itinerary, request: string): Promise<Itinerary> => {
   try {
-    // Call the Serverless Function
     const response = await fetch('/api/itinerary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -258,8 +235,6 @@ export const modifyItinerary = async (currentItinerary: Itinerary, request: stri
     }
 
     const newData = await response.json();
-
-    // Re-run image enrichment
     return await enrichItineraryWithImages(newData, currentItinerary.destination || "", currentItinerary.vibe || "Nature");
 
   } catch (error) {

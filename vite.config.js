@@ -9,8 +9,8 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     base: './', // ensures correct relative paths for deployment
     define: {
-      // API_KEY is removed here to prevent "An API Key must be set..." browser error.
-      // It is now accessed only on the server side via process.env.GOOGLE_API_KEY.
+      // Safely expose only the keys needed for Client-side Image APIs.
+      // NEVER expose GOOGLE_API_KEY here.
       'process.env.UNSPLASH_ACCESS_KEY': JSON.stringify(env.UNSPLASH_ACCESS_KEY),
       'process.env.PEXELS_API_KEY': JSON.stringify(env.PEXELS_API_KEY),
     },
