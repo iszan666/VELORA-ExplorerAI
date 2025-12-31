@@ -2,6 +2,7 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 // --- SCHEMA DEFINITION ---
+// Kept identical to ensure frontend compatibility
 const itinerarySchema: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -59,131 +60,76 @@ const itinerarySchema: Schema = {
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // 1. ALWAYS Set CORS Headers first. 
-  // This ensures that even if we error out, the client can read the error JSON.
+  // 1. CORS Headers
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*'); 
   res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // 2. Handle Preflight OPTIONS request
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
   try {
-    // 3. Runtime Environment Check
-    // We do this inside the try/catch to return a JSON error instead of a hard crash (500 INVOCATION_FAILED).
-    const apiKey = process.env.GOOGLE_API_KEY;
+    const apiKey = process.env.API_KEY;
     if (!apiKey) {
-      console.error("CRITICAL: GOOGLE_API_KEY is missing in Vercel Environment Variables.");
-      return res.status(500).json({ 
-        error: "Server Configuration Error", 
-        message: "The server is missing the API Key. Please check Vercel settings." 
-      });
+      console.error("CRITICAL: API_KEY is missing.");
+      return res.status(500).json({ error: "Server Config Error", message: "API Key missing." });
     }
 
-    // 4. Input Validation
     if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Method Not Allowed. Use POST.' });
+      return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
     const { action, prefs, currentItinerary, request } = req.body || {};
     
-    // 5. Initialize AI Safely
-    const ai = new GoogleGenAI({ apiKey });
-    const model = "gemini-2.5-flash-002"; 
+    // 2. USE THE FASTEST MODEL
+    // Use gemini-3-flash-preview for basic text tasks (itinerary generation) as per guidelines.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const model = "gemini-3-flash-preview"; 
 
-    // 6. Construct Prompt
     let prompt = '';
     if (action === 'generate') {
-      if (!prefs || !prefs.destination) {
-         return res.status(400).json({ error: "Missing preferences or destination." });
-      }
+      if (!prefs || !prefs.destination) return res.status(400).json({ error: "Missing data" });
+      
+      // Compact prompt to save token generation time
       prompt = `
-        Curate a bespoke travel itinerary for ${prefs.destination}.
-        Duration: ${prefs.duration} days. Budget: ${prefs.budget}. Vibe: ${prefs.vibe}.
-        Return strictly JSON matching the provided schema.
-        Ensure every activity has realistic latitude/longitude coordinates.
-        Assume trip starts tomorrow.
+        Create a ${prefs.duration}-day travel itinerary for ${prefs.destination}.
+        Budget: ${prefs.budget}. Vibe: ${prefs.vibe}.
+        Output strict JSON. No markdown.
+        Activities must have real lat/lng coordinates.
       `;
     } else if (action === 'modify') {
-       if (!currentItinerary) {
-         return res.status(400).json({ error: "Missing currentItinerary for modification." });
-       }
       prompt = `
-        You are a travel advisor. Modify this itinerary: ${JSON.stringify(currentItinerary)}
-        User Request: "${request}"
-        Keep the structure valid JSON.
+        Modify this itinerary JSON: ${JSON.stringify(currentItinerary)}
+        Request: "${request}"
+        Keep strict JSON structure.
       `;
-    } else {
-      return res.status(400).json({ error: "Invalid 'action'. Must be 'generate' or 'modify'." });
     }
 
-    // 7. Execute External API Call (Gemini)
-    // Wrapped in try/catch to handle Timeouts or API Errors specifically
-    let response;
-    try {
-      response = await ai.models.generateContent({
-        model: model,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: itinerarySchema,
-        }
-      });
-    } catch (apiError: any) {
-      console.error("Gemini API Call Failed:", apiError);
-      return res.status(503).json({
-        error: "AI Service Unavailable",
-        details: apiError.message || "Failed to contact Google AI services."
-      });
-    }
+    // 3. GENERATE
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: itinerarySchema,
+      }
+    });
 
-    // 8. Validate AI Response
-    // Safety filters might block the response, resulting in no candidates.
-    if (!response || !response.candidates || response.candidates.length === 0) {
-      console.warn("Gemini returned no candidates. Potential safety block.");
-      return res.status(422).json({
-        error: "Content Generation Blocked",
-        message: "The AI was unable to generate a safe itinerary for this request."
-      });
-    }
-
-    // Accessing .text might throw if the response format is unexpected
     const text = response.text;
-    if (!text) {
-      return res.status(500).json({
-        error: "Empty Response",
-        message: "The AI generated an empty response."
-      });
-    }
+    if (!text) throw new Error("Empty AI response");
 
-    // 9. Safe JSON Parsing
-    let data;
-    try {
-      // Remove any markdown code fences if they exist
-      const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      data = JSON.parse(cleanedText);
-    } catch (parseError) {
-      console.error("JSON Parse Error:", parseError);
-      console.error("Raw Text Received:", text);
-      return res.status(500).json({
-        error: "Data Formatting Error",
-        message: "The AI generated invalid JSON data. Please try again."
-      });
-    }
+    const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const data = JSON.parse(cleanedText);
 
-    // Success
     return res.status(200).json(data);
 
-  } catch (globalError: any) {
-    // 10. Global Crash Handler
-    // Catches any other synchronous errors or unhandled promises
-    console.error("UNHANDLED SERVER ERROR:", globalError);
+  } catch (error: any) {
+    console.error("API Error:", error);
     return res.status(500).json({ 
-      error: 'Internal Server Error', 
-      details: globalError instanceof Error ? globalError.message : String(globalError) 
+      error: 'Generation Failed', 
+      details: error.message 
     });
   }
 }

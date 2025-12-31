@@ -1,15 +1,10 @@
 import { TripPreferences, Itinerary } from "../types";
 
 // --- CLIENT-SIDE SERVICE ---
-// 1. THIS FILE MUST NOT IMPORT @google/genai
-// 2. THIS FILE MUST NOT USE process.env.GOOGLE_API_KEY
-// 3. It relies ENTIRELY on fetch('/api/itinerary')
+// Relies on fetch('/api/itinerary') and external image APIs
 
 const UNSPLASH_ACCESS_KEY = process.env.UNSPLASH_ACCESS_KEY; 
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
-
-// ... (Image helper logic remains client-side as it is safe) ...
-// Re-including image logic to ensure full file integrity
 
 const VIBE_IMAGES = {
   Nature: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?q=80&w=2070&auto=format&fit=crop", 
@@ -19,19 +14,35 @@ const VIBE_IMAGES = {
   Default: "https://images.unsplash.com/photo-1469474968028-56623f02e42e?q=80&w=2074&auto=format&fit=crop"
 };
 
+// --- HELPER: Aggressive Timeout ---
+// Reduced to 2000ms (2 seconds) for images. 
+// Speed is priority. If image is slow, show default.
+const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 2000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        throw error; // Let caller handle fallback
+    }
+};
+
 const getSearchQueries = (destination: string) => {
   const parts = destination.split(',').map(p => p.trim());
   const city = parts[0];
-  const country = parts.length > 1 ? parts[parts.length - 1] : city;
-  return [destination, `${city} landmark skyline`, `${country} travel scenery`];
+  return [`${city} tourism`, `${city} travel`];
 };
 
 const fetchUnsplashImage = async (query: string): Promise<string | null> => {
   if (!UNSPLASH_ACCESS_KEY) return null;
   try {
-    const res = await fetch(
-      `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&orientation=landscape&per_page=1&content_filter=high`,
-      { headers: { Authorization: `Client-ID ${UNSPLASH_ACCESS_KEY}` } }
+    const res = await fetchWithTimeout(
+      `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&orientation=landscape&per_page=1`,
+      { headers: { Authorization: `Client-ID ${UNSPLASH_ACCESS_KEY}` } },
+      2000
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -42,9 +53,10 @@ const fetchUnsplashImage = async (query: string): Promise<string | null> => {
 const fetchPexelsImage = async (query: string): Promise<string | null> => {
   if (!PEXELS_API_KEY) return null;
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&orientation=landscape&per_page=1`,
-      { headers: { Authorization: PEXELS_API_KEY } }
+      { headers: { Authorization: PEXELS_API_KEY } },
+      2000
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -54,7 +66,11 @@ const fetchPexelsImage = async (query: string): Promise<string | null> => {
 
 const fetchWikipediaImage = async (destination: string): Promise<string | null> => {
   try {
-    const res = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(destination)}`);
+    const res = await fetchWithTimeout(
+        `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(destination)}`,
+        {},
+        2000
+    );
     if (res.ok) {
       const data = await res.json();
       return data.originalimage?.source || data.thumbnail?.source || null;
@@ -75,116 +91,154 @@ const fetchFromProviders = async (query: string): Promise<string | null> => {
   return null;
 };
 
+// --- NEW EXPORT FOR LOADING SCREEN ---
 export const fetchDestinationGallery = async (destination: string): Promise<string[]> => {
-  // Placeholder implementation for gallery to keep file functional
-  return [
-    "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?q=80&w=2021&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?q=80&w=2070&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?q=80&w=2073&auto=format&fit=crop",
-  ];
-};
+  const images: string[] = [];
+  const query = `${destination} travel aesthetic`;
 
-const fetchRealLocationImage = async (destination: string, vibe: string): Promise<string> => {
-  const queries = getSearchQueries(destination);
-  for (const query of queries) {
-    const img = await fetchFromProviders(query);
-    if (img) return img;
+  // 1. Try Unsplash (fetch 3)
+  if (UNSPLASH_ACCESS_KEY) {
+    try {
+      const res = await fetchWithTimeout(
+        `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&orientation=landscape&per_page=3`,
+        { headers: { Authorization: `Client-ID ${UNSPLASH_ACCESS_KEY}` } },
+        2500
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.results) {
+           data.results.forEach((r: any) => {
+             if (r.urls?.regular) images.push(r.urls.regular);
+           });
+        }
+      }
+    } catch (e) { /* ignore */ }
   }
-  const wikiImg = await fetchWikipediaImage(destination);
-  if (wikiImg) return wikiImg;
-  return VIBE_IMAGES[vibe as keyof typeof VIBE_IMAGES] || VIBE_IMAGES.Default;
+
+  // 2. Fill with Pexels
+  if (images.length < 3 && PEXELS_API_KEY) {
+     try {
+      const needed = 3 - images.length;
+      const res = await fetchWithTimeout(
+        `https://api.pexels.com/v1/search?query=${encodeURIComponent(destination)}&orientation=landscape&per_page=${needed}`,
+        { headers: { Authorization: PEXELS_API_KEY } },
+        2500
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.photos) {
+           data.photos.forEach((p: any) => {
+             if (p.src?.large2x) images.push(p.src.large2x);
+           });
+        }
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // 3. Fallback to vibe defaults if completely failed
+  if (images.length === 0) {
+      return [VIBE_IMAGES.Nature, VIBE_IMAGES.Urban, VIBE_IMAGES.Relax];
+  }
+
+  return [...new Set(images)];
 };
 
-const fetchDayImage = async (destination: string, day: any, vibe: string): Promise<string> => {
-  const cleanTitle = day.title.replace(/[^a-zA-Z0-9 ]/g, ' ');
-  const titleQuery = `${destination} ${cleanTitle}`;
-  let img = await fetchFromProviders(titleQuery);
-  if (img) return img;
-  return VIBE_IMAGES[vibe as keyof typeof VIBE_IMAGES] || VIBE_IMAGES.Default;
-};
-
+// --- IMAGE ENRICHMENT ---
 const enrichItineraryWithImages = async (
   data: any, 
   destination: string, 
   vibe: string
 ): Promise<Itinerary> => {
+  const vibeImage = VIBE_IMAGES[vibe as keyof typeof VIBE_IMAGES] || VIBE_IMAGES.Default;
+
+  // 1. Fetch Day Images (Parallel but Safe)
   const enhancedDays = await Promise.all(data.days.map(async (day: any) => {
-      const img = await fetchDayImage(destination, day, vibe);
-      return { ...day, imageUrl: img };
+      try {
+          // Try to fetch specific image, fail fast to vibe image
+          const cleanTitle = day.title.replace(/[^a-zA-Z0-9 ]/g, ' ');
+          const img = await fetchFromProviders(`${destination} ${cleanTitle}`);
+          return { ...day, imageUrl: img || vibeImage };
+      } catch (e) {
+          return { ...day, imageUrl: vibeImage };
+      }
   }));
 
+  // 2. Fetch Hero Image
   let heroImage = data.heroImage;
   if (!heroImage) {
-      heroImage = await fetchRealLocationImage(destination, vibe);
+      try {
+        const queries = getSearchQueries(destination);
+        for (const q of queries) {
+            heroImage = await fetchFromProviders(q);
+            if (heroImage) break;
+        }
+        if (!heroImage) heroImage = await fetchWikipediaImage(destination);
+      } catch (e) { /* Ignore */ }
   }
   
   return {
     ...data,
     days: enhancedDays,
     vibe: vibe,
-    heroImage: heroImage,
+    heroImage: heroImage || vibeImage,
     destination: destination
   } as Itinerary;
 };
 
 // --- CORE FUNCTION: GENERATE ---
-// This calls the Vercel Serverless Function via fetch.
-// It DOES NOT use the Google SDK directly.
 export const generateItinerary = async (prefs: TripPreferences): Promise<Itinerary> => {
-  try {
-    const heroImagePromise = fetchRealLocationImage(prefs.destination, prefs.vibe);
+  const controller = new AbortController();
+  // 30s max total timeout (Server + Images)
+  // If server is fast (5s), we have 25s for images (capped at 2s each anyway)
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-    // Call /api/itinerary (Relative path works automatically in Vercel)
+  try {
     const response = await fetch('/api/itinerary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'generate',
-        prefs
-      })
+      body: JSON.stringify({ action: 'generate', prefs }),
+      signal: controller.signal
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text();
-      // Throwing error here catches in the UI to show ErrorScreen
-      throw new Error(`Server error: ${response.status} ${errorText}`);
+      // Handle Vercel 504 Gateway Timeout specifically
+      if (response.status === 504) {
+         throw new Error("Server timeout. Try a shorter trip duration.");
+      }
+      throw new Error(`Server error (${response.status}): ${errorText}`);
     }
 
     const data = await response.json();
-    const heroImage = await heroImagePromise;
-    data.heroImage = heroImage;
     
+    // Enrich with images (client-side hotlinking)
     return await enrichItineraryWithImages(data, prefs.destination, prefs.vibe);
 
-  } catch (error) {
-    console.error("Itinerary Generation Error:", error);
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    console.error("Generate Error:", error);
+    if (error.name === 'AbortError') throw new Error("Connection timed out.");
     throw error;
   }
 };
 
-// --- CORE FUNCTION: MODIFY ---
 export const modifyItinerary = async (currentItinerary: Itinerary, request: string): Promise<Itinerary> => {
   try {
     const response = await fetch('/api/itinerary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'modify',
-        currentItinerary,
-        request
-      })
+      body: JSON.stringify({ action: 'modify', currentItinerary, request })
     });
 
-    if (!response.ok) {
-       const errorText = await response.text();
-       throw new Error(`Server error: ${response.status} ${errorText}`);
-    }
+    if (!response.ok) throw new Error("Modification failed");
 
     const newData = await response.json();
-    return await enrichItineraryWithImages(newData, currentItinerary.destination || "", currentItinerary.vibe || "Nature");
-
+    // Re-use existing images to save time/bandwidth
+    newData.heroImage = currentItinerary.heroImage;
+    return newData;
   } catch (error) {
-    console.error("Modification Error:", error);
     throw error;
   }
 };
