@@ -1,0 +1,5 @@
+{
+  "name": "VELORA Explorer",
+  "description": "An AI-powered travel itinerary generator that curates personalized trips based on destination, budget, and vibe.",
+  "requestFramePermissions": []
+}
