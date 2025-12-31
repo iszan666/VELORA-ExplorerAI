@@ -1,12 +1,7 @@
-import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { TripPreferences, Itinerary, DayPlan } from "../types";
-
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+import { TripPreferences, Itinerary } from "../types";
 
 // --- CONFIGURATION: IMAGE API KEYS ---
-// To make the images "real", paste your API keys inside the quotes below.
-// If you leave these blank, the app will fallback to Wikipedia (free) or generic images.
-
+// These remain on the client for direct browser fetching to avoid server timeouts on image processing
 const UNSPLASH_ACCESS_KEY = process.env.UNSPLASH_ACCESS_KEY || "PkfwOUNXL239BcQnXVlQ648ZmYIpzIzEtk9eQC0hBOQ"; 
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY || "CWQEpRvcOTu7VoxRrXd7cL37GDxkDtf6Vo43q1ye1iSjLxRf8MNyfhC4";
 
@@ -18,92 +13,6 @@ const VIBE_IMAGES = {
   Relax: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?q=80&w=2073&auto=format&fit=crop", 
   Food: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=2070&auto=format&fit=crop", 
   Default: "https://images.unsplash.com/photo-1469474968028-56623f02e42e?q=80&w=2074&auto=format&fit=crop"
-};
-
-const itinerarySchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    tripTitle: { type: Type.STRING, description: "Title of the trip, e.g., 'Trip to Bali'" },
-    dateRange: { type: Type.STRING, description: "Simulated date range, e.g., 'Oct 12 - Oct 24'" },
-    totalBudget: { type: Type.STRING, description: "Estimated total cost" },
-    weather: { type: Type.STRING, description: "Expected weather summary, e.g. '28°C, Sunny'" },
-    currencyRate: { type: Type.STRING, description: "Exchange rate info, e.g., '1 USD = 15,450 IDR'" },
-    whyDestination: { 
-      type: Type.STRING, 
-      description: "A professional, personalized explanation (3-4 sentences) of why this destination fits the user's duration, budget, and vibe." 
-    },
-    localTips: { 
-      type: Type.ARRAY, 
-      items: { type: Type.STRING },
-      description: "2-3 short, essential local tips"
-    },
-    packingList: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-      description: "3-4 essential packing items"
-    },
-    budgetAssumption: {
-      type: Type.STRING,
-      description: "A professional paragraph explaining the mid-range budget assumptions and disclaimer about variable costs."
-    },
-    localContext: {
-      type: Type.OBJECT,
-      description: "Cultural context including food, customs, and etiquette",
-      properties: {
-        foodAndDrinks: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING },
-          description: "2-3 well-known local foods or drinks"
-        },
-        customs: {
-          type: Type.STRING,
-          description: "Brief explanation of cultural habits or daily customs (1-2 sentences)"
-        },
-        etiquetteTips: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING },
-          description: "Short practical travel etiquette tips"
-        }
-      },
-      required: ["foodAndDrinks", "customs", "etiquetteTips"]
-    },
-    days: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          day: { type: Type.INTEGER },
-          date: { type: Type.STRING },
-          title: { type: Type.STRING, description: "Main theme of the day" },
-          costEstimate: { type: Type.STRING, description: "Cost for this day" },
-          activities: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                time: { type: Type.STRING, description: "Strictly 'Morning', 'Afternoon', or 'Evening'" },
-                title: { type: Type.STRING },
-                desc: { type: Type.STRING, description: "A refined, professional description (1-2 sentences)" },
-                icon: { type: Type.STRING, description: "Material symbol name (e.g. restaurant, hiking, museum)" },
-                coordinates: {
-                  type: Type.OBJECT,
-                  description: "Coordinates of the activity location",
-                  properties: {
-                    lat: { type: Type.NUMBER },
-                    lng: { type: Type.NUMBER }
-                  },
-                  required: ["lat", "lng"]
-                }
-              },
-              required: ["time", "title", "desc", "icon", "coordinates"]
-            }
-          }
-        },
-        required: ["day", "date", "title", "costEstimate", "activities"]
-      }
-    }
-  },
-  required: ["tripTitle", "dateRange", "totalBudget", "weather", "days", "localTips", "packingList", "budgetAssumption", "localContext", "whyDestination"]
 };
 
 // --- Image Provider Helpers ---
@@ -277,13 +186,11 @@ const enrichItineraryWithImages = async (
   // Process days to fetch real images for each day in parallel
   const enhancedDays = await Promise.all(data.days.map(async (day: any) => {
       // Re-use existing image if it's already a real URL (not a placeholder logic) 
-      // AND title hasn't changed drastically? 
-      // For simplicity, we re-fetch to ensure match with new titles if changed.
       const img = await fetchDayImage(destination, day, vibe);
       return { ...day, imageUrl: img };
   }));
 
-  // Fetch Hero Image if missing
+  // Fetch Hero Image if missing (or passed from previous promise)
   let heroImage = data.heroImage;
   if (!heroImage) {
       heroImage = await fetchRealLocationImage(destination, vibe);
@@ -300,123 +207,60 @@ const enrichItineraryWithImages = async (
 
 export const generateItinerary = async (prefs: TripPreferences): Promise<Itinerary> => {
   try {
-    const model = "gemini-3-flash-preview"; 
-    
-    // Start fetching the Hero image in parallel with the AI request
+    // Start fetching the Hero image in parallel with the API request
     const heroImagePromise = fetchRealLocationImage(prefs.destination, prefs.vibe);
 
-    const prompt = `
-      Curate a bespoke travel itinerary for ${prefs.destination}.
-      
-      **Trip Parameters:**
-      - Duration: ${prefs.duration} days.
-      - Budget: ${prefs.budget} (Scale: $ Economy to $$$ Luxury).
-      - Vibe: ${prefs.vibe}.
-
-      **Style Guide:**
-      - **Tone:** Elegant, professional, and inspiring. Use sophisticated language.
-      - **Structure:** Each day MUST have exactly three activities labeled 'Morning', 'Afternoon', and 'Evening'.
-      - **Descriptions:** Short, refined, and impactful.
-      - **Budget Section:** Include a short "Budget Assumption" section. Write it in a professional, calm travel-advisor tone. Assume a mid-range travel style that includes:
-         - Comfortable 3-star accommodation
-         - Public transportation or standard ride services
-         - Regular dining at local restaurants
-         Clearly state that the budget provided is an estimate, not a fixed price, and that actual costs may vary depending on travel season, availability, personal preferences, and destination conditions.
-      - **Local Context:** Include a section for local context.
-         - **Food:** 2–3 genuine local foods or drinks.
-         - **Customs:** Brief explanation of habits/daily customs (1-2 sentences).
-         - **Etiquette:** Short, practical etiquette tips.
-         - **Tone:** Calm, professional, factual. No stereotypes.
-      - **Advisor Note:** Include a section titled "Why This Destination Works for You".
-         - Explain why it fits the ${prefs.duration}-day timeframe, ${prefs.budget} budget, and ${prefs.vibe} vibe.
-         - Mention accessibility/ease of travel.
-         - Tone: Professional, reassuring, no marketing fluff. 3-4 sentences max.
-
-      **Requirements:**
-      1. Generate a valid JSON response based on the schema.
-      2. Ensure icons are valid Material Symbols Outlined names (snake_case).
-      3. **Crucial:** Provide realistic GPS coordinates (lat, lng) for every activity.
-      4. Make the content highly specific to ${prefs.destination}.
-      5. Assume the trip starts tomorrow.
-    `;
-
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: itinerarySchema,
-        temperature: 0.6
-      }
+    // Call the Serverless Function instead of Google GenAI SDK directly
+    const response = await fetch('/api/itinerary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'generate',
+        prefs
+      })
     });
 
-    const text = response.text;
-    if (!text) throw new Error("No response from AI");
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.statusText}`);
+    }
 
-    const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    const data = JSON.parse(cleanedText);
+    const data = await response.json();
     const heroImage = await heroImagePromise;
     data.heroImage = heroImage;
     
+    // Enrich with images on the client side
     return await enrichItineraryWithImages(data, prefs.destination, prefs.vibe);
 
   } catch (error) {
-    console.error("Gemini API Error:", error);
+    console.error("Itinerary Generation Error:", error);
     throw error;
   }
 };
 
-/**
- * Modifies an existing itinerary based on user instructions.
- * Performs partial regeneration.
- */
 export const modifyItinerary = async (currentItinerary: Itinerary, request: string): Promise<Itinerary> => {
   try {
-    const model = "gemini-3-flash-preview";
-
-    const prompt = `
-      You are a professional travel advisor refining an existing travel itinerary for ${currentItinerary.destination || currentItinerary.tripTitle}.
-      
-      **Current Itinerary JSON:**
-      ${JSON.stringify(currentItinerary)}
-
-      **User Request:**
-      "${request}"
-
-      **Instructions:**
-      1. Update the JSON to strictly fulfill the user's request (e.g., change activities, update vibe, adjust pacing).
-      2. **PRESERVE** the existing destination, trip duration, and budget level unless explicitly asked to change.
-      3. **PRESERVE** unmodified sections exactly as they are. Do not rewrite descriptions unless necessary.
-      4. Maintain the original professional, elegant tone.
-      5. Ensure strictly valid JSON output matching the original schema.
-      6. If changing activities, provide new realistic GPS coordinates and icons.
-      7. Update the "Why This Destination Works for You" section only if the changes significantly alter the trip's nature.
-
-      **Goal:**
-      Make the user feel heard by making thoughtful, specific adjustments without disrupting the parts of the plan they didn't complain about.
-    `;
-
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: itinerarySchema,
-        temperature: 0.6
-      }
+    // Call the Serverless Function
+    const response = await fetch('/api/itinerary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'modify',
+        currentItinerary,
+        request
+      })
     });
 
-    const text = response.text;
-    if (!text) throw new Error("No response from AI during modification");
+    if (!response.ok) {
+       throw new Error(`Server error: ${response.statusText}`);
+    }
 
-    const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    const newData = JSON.parse(cleanedText);
+    const newData = await response.json();
 
-    // Re-run image enrichment to ensure any *new* activities get appropriate photos
+    // Re-run image enrichment
     return await enrichItineraryWithImages(newData, currentItinerary.destination || "", currentItinerary.vibe || "Nature");
 
   } catch (error) {
-    console.error("Gemini Modification Error:", error);
+    console.error("Modification Error:", error);
     throw error;
   }
 };

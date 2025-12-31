@@ -1,5 +1,4 @@
 import React from 'react';
-import 'leaflet/dist/leaflet.css'
 
 interface ProfileProps {
   savedCount: number;
